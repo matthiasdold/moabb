@@ -18,7 +18,12 @@ from moabb.datasets.compound_dataset import compound
 from moabb.datasets.fake import FakeDataset
 from moabb.evaluations import evaluations as ev
 from moabb.evaluations.base import optuna_available
-from moabb.evaluations.utils import create_save_path, save_model_cv, save_model_list
+from moabb.evaluations.utils import (
+    ChronoGroupsSplit,
+    create_save_path,
+    save_model_cv,
+    save_model_list,
+)
 from moabb.paradigms.motor_imagery import FakeImageryParadigm
 
 
@@ -588,3 +593,21 @@ class UtilEvaluation:
             hdf5_path, "Models_WithinSession", code, "1", "0", "evalu@tion#name"
         )
         assert save_path == expected_path
+
+    def test_chrono_groups_split(self):
+        X = np.random.randn(8, 2)
+        y = np.array([0, 0, 1, 1, 0, 0, 1, 1])
+        groups = np.array([1, 1, 2, 2, 3, 3, 4, 4])
+        splitter = ChronoGroupsSplit()
+        splits = splitter.split(X, y, groups)
+
+        expected_splits = [
+            (np.array([4, 5, 6, 7]), np.array([0, 1, 2, 3])),
+            (np.array([0, 1, 2, 3]), np.array([4, 5, 6, 7])),
+        ]
+
+        for (train_index, test_index), (expected_train, expected_test) in zip(
+            splits, expected_splits
+        ):
+            np.testing.assert_array_equal(train_index, expected_train)
+            np.testing.assert_array_equal(test_index, expected_test)

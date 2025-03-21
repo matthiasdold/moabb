@@ -4,6 +4,7 @@ from pathlib import Path
 from pickle import HIGHEST_PROTOCOL, dump
 from typing import Sequence
 
+import numpy as np
 from numpy import argmax
 from sklearn.pipeline import Pipeline
 
@@ -213,3 +214,122 @@ def _convert_sklearn_params_to_optuna(param_grid: dict) -> dict:
             except Exception as e:
                 raise ValueError(f"Conversion failed for parameter {key}: {e}")
         return optuna_params
+
+
+class ChronoGroupsSplit:
+    """Leave out blocks of chronologically sorted pairs.
+
+    This class is designed to split data into training and testing sets while
+    preserving the temporal order of the data. It ensures that the training set
+    includes a full group for each unique label, and the test set includes the
+    remaining groups. This is particularly useful for time-series data or
+    experiments with multiple blocks of trials.
+
+    Attributes
+    ----------
+    None
+
+    Methods
+    -------
+    split(X, y, groups)
+        Return the indices of all splits of the data in X and y sorted according
+        to a grouping variable.
+    """
+
+    def __init__(self, **kwargs):
+        for k in kwargs:
+            print(f"Received kwargs for {k=} which will not be used")
+
+    def split(
+        self, X: np.ndarray, y: np.ndarray, groups: np.ndarray
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
+        """
+        Return the indices of all splits of the data in X and y sorted according
+        to a grouping variable.
+
+        This method is used to preserve the temporal order of the data when
+        splitting into train and test sets. It ensures that the training set
+        includes a full group for each unique label, and the test set includes
+        the remaining groups. This is particularly useful for time-series data
+        or experiments with multiple blocks of trials.
+
+        Parameters
+        ----------
+        X : np.ndarray (nsamples, nfeatures)
+            The data array with the sample dimension first.
+        y : np.ndarray (nsamples, )
+            The labels vector.
+        groups : np.ndarray (nsamples, )
+            A vector associating a group with each label. Splits will sort the
+            available group elements per unique label and then ensure that the
+            training set includes a full group for each unique label. By
+            modifying the group labels, one can control how many samples are
+            included in the according train/test sets.
+
+        Returns
+        -------
+        splits : list[tuple[np.ndarray, np.ndarray]]
+            A list of splits of (ix_train, ix_test) tuples to loop over.
+
+        Examples
+        --------
+        Consider data from an experiment with 4 blocks and 2 trials for each
+        block. The split keeps adjacent blocks (encoded in the `groups` variable).
+
+        >>> import numpy as np
+        >>> from moabb.evaluations.utils import ChronoGroupsSplit
+        >>> X = np.random.randn(8, 2)
+        >>> y = np.array([0, 0, 1, 1, 0, 0, 1, 1])
+        >>> groups = np.array([1, 1, 2, 2, 3, 3, 4, 4])
+        >>> splitter = ChronoGroupsSplit()
+        >>> splits = splitter.split(X, y, groups)
+        >>> for train_index, test_index in splits:
+        ...     print("TRAIN:", train_index, "TEST:", test_index)
+
+            TRAIN: [4 5 6 7] TEST: [0 1 2 3]   # test idxs are: group 1 and 2, according to labels 0, 1
+            TRAIN: [0 1 2 3] TEST: [4 5 6 7]   # test idxs are: group 3 and 4, according to labels 0, 1
+        """
+        y = np.asarray(y)
+        groups = np.asarray(groups)
+
+        # get groups per label
+        gm = {k: list(set(groups[y == k])) for k in set(y)}
+
+        # sort the group labels to match
+        for v in gm.values():
+            v.sort()
+
+        # ensure that groups are distinct in labels
+        assert all(
+            [set(s).intersection(groups[y != k]) == set() for k, s in gm.items()]
+        ), " Groups are not unique in labels. Please ensure uniqueness."
+
+        # ensure lengths match
+        set_lens = [len(v) for v in gm.values()]
+        if not all([e == set_lens[0] for e in set_lens]):
+            print(
+                "Groups per label do not align along all unique label values (y)"
+                "- will zip and thus drop all groups longer than the smallest "
+                "set."
+            )
+
+        Xidcs = np.arange(X.shape[0])
+
+        splits = [
+            (
+                np.hstack(
+                    [
+                        Xidcs[groups == list(gv)[j]]
+                        for gv in gm.values()
+                        for j in range(min(set_lens))
+                        if j != i
+                    ]
+                ),  # the non selected --> train set
+                np.hstack(
+                    [Xidcs[groups == list(gv)[i]] for gv in gm.values()]
+                ),  # the selected per grp --> test set
+            )
+            for i in range(min(set_lens))
+        ]
+
+        return splits
